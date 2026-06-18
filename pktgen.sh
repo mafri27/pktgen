@@ -17,6 +17,7 @@
 #   -p, --pps <n>        Pakete/s GESAMT begrenzen (0 = Flood/unbegrenzt, default 0)
 #                        Bandbreite = pps * size * 8. Wird auf die Threads aufgeteilt.
 #   -r, --rand-source    zufaellige Quell-IPs (SRC_MIN..SRC_MAX) statt fixer Egress-IP
+#   -R, --rand-ports     zufaellige UDP Quell-/Ziel-Ports (PORT_MIN..PORT_MAX, default 1..65535)
 #   -h, --help           Hilfe
 #
 # Beispiele:
@@ -38,7 +39,7 @@ PGCTRL=/proc/net/pktgen/pgctrl
 PGDIR=/proc/net/pktgen
 
 usage() {
-    sed -n '10,27p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '10,28p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-1}"
 }
 
@@ -50,6 +51,7 @@ DURATION=60
 THREADS=1
 PPS=0
 RAND_SRC="${RAND_SRC:-0}"
+RAND_PORTS="${RAND_PORTS:-0}"
 DST=""
 
 while (( $# )); do
@@ -59,6 +61,7 @@ while (( $# )); do
         -n|--threads)     THREADS="${2:-}";  shift 2 ;;
         -p|--pps)         PPS="${2:-}";      shift 2 ;;
         -r|--rand-source) RAND_SRC=1;        shift ;;
+        -R|--rand-ports)  RAND_PORTS=1;      shift ;;
         -h|--help)        usage 0 ;;
         --)               shift; break ;;
         -*)               echo "FEHLER: unbekannte Option '$1'" >&2; usage ;;
@@ -81,6 +84,10 @@ BURST="${BURST:-64}"
 # auf dein eigenes, ueber den Link geroutetes Netz setzen.
 SRC_MIN="${SRC_MIN:-0.0.0.1}"
 SRC_MAX="${SRC_MAX:-255.255.255.254}"
+
+# UDP-Port-Range fuer --rand-ports (Env): default kompletter Port-Bereich.
+PORT_MIN="${PORT_MIN:-1}"
+PORT_MAX="${PORT_MAX:-65535}"
 
 # Adressfamilie aus dem Ziel ableiten (':' -> IPv6)
 if [[ "$DST" == *:* ]]; then
@@ -169,7 +176,9 @@ trap cleanup INT TERM EXIT
 
 echo ">>> pktgen UDP-Flood (IPv$FAMILY) -> $DST  (Next-Hop $NH / $DSTMAC, dev $IF, MTU $MTU)"
 if (( RAND_SRC == 1 )); then SRC_INFO="rand $SRC_MIN..$SRC_MAX"; else SRC_INFO="$SRC_ADDR (fix, uRPF-ok)"; fi
+if (( RAND_PORTS == 1 )); then PORT_INFO="rand $PORT_MIN..$PORT_MAX (src+dst)"; else PORT_INFO="fix 9 (src+dst)"; fi
 echo ">>> Quell-IP: $SRC_INFO"
+echo ">>> UDP-Ports: $PORT_INFO"
 if (( PPS_PER > 0 )); then
     MBIT=$(( ACTUAL_PPS * PKT_SIZE * 8 / 1000000 ))
     RATE_INFO="$ACTUAL_PPS pps ($PPS_PER/Thread) ~= ${MBIT} Mbit/s (L2)"
@@ -203,10 +212,15 @@ for (( i = 0; i < THREADS; i++ )); do
     fi
     pg_dev "$dev" "pkt_size $PKT_SIZE"
     pg_dev "$dev" "dst_mac $DSTMAC"
-    pg_dev "$dev" "udp_dst_min 9"         # discard-Port; nach Bedarf anpassen
-    pg_dev "$dev" "udp_dst_max 9"
-    pg_dev "$dev" "udp_src_min 9"
-    pg_dev "$dev" "udp_src_max 9"
+    if (( RAND_PORTS == 1 )); then
+        pg_dev "$dev" "udp_src_min $PORT_MIN"; pg_dev "$dev" "udp_src_max $PORT_MAX"
+        pg_dev "$dev" "udp_dst_min $PORT_MIN"; pg_dev "$dev" "udp_dst_max $PORT_MAX"
+        pg_dev "$dev" "flag UDPSRC_RND"
+        pg_dev "$dev" "flag UDPDST_RND"
+    else
+        pg_dev "$dev" "udp_dst_min 9"; pg_dev "$dev" "udp_dst_max 9"   # discard-Port
+        pg_dev "$dev" "udp_src_min 9"; pg_dev "$dev" "udp_src_max 9"
+    fi
     if (( FAMILY == 6 )); then
         pg_dev "$dev" "dst6 $DST"
         pg_dev "$dev" "src6 $SRC_ADDR"    # feste, uRPF-gueltige Quell-IP (v6: kein RND)
