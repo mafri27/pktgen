@@ -77,6 +77,7 @@ done
 #               Random-Source moeglich). Gross (z.B. 100000) = Max-pps, aber
 #               IPSRC_RND variiert dann nur noch alle CLONE_SKB Pakete.
 #   BURST     : xmit_more-Bursts -> weniger Overhead pro Paket. 0 = aus (default 64).
+CLONE_SKB_ENV="${CLONE_SKB+set}"   # "set", falls per Env vorgegeben
 CLONE_SKB="${CLONE_SKB:-100000}"
 BURST="${BURST:-64}"
 
@@ -108,6 +109,17 @@ fi
 [[ "$PPS" =~ ^[0-9]+$ ]]                          || { echo "FEHLER: --pps muss Zahl sein (0 = Flood)." >&2; usage; }
 [[ "$CLONE_SKB" =~ ^[0-9]+$ ]] || { echo "FEHLER: CLONE_SKB muss Zahl sein." >&2; exit 1; }
 [[ "$BURST"     =~ ^[0-9]+$ ]] || { echo "FEHLER: BURST muss Zahl sein." >&2; exit 1; }
+
+# Randomisierung wirkt nur beim Neu-Bauen des skb. Mit clone_skb>0 bleibt der
+# Random-Wert ueber clone_skb Pakete konstant -> kein Per-Paket-Random.
+# Daher bei aktiver Randomisierung clone_skb=0 erzwingen (ausser explizit per Env).
+if (( RAND_PORTS == 1 || RAND_SRC == 1 )) && (( CLONE_SKB > 0 )) && [[ -z "$CLONE_SKB_ENV" ]]; then
+    CLONE_SKB=0
+    echo "INFO: Randomisierung aktiv -> clone_skb=0 (Per-Paket-Random, dafuer weniger pps). Override: CLONE_SKB=N" >&2
+fi
+if (( RAND_PORTS == 1 || RAND_SRC == 1 )) && (( CLONE_SKB > 0 )); then
+    echo "WARNUNG: clone_skb=$CLONE_SKB -> Random-Werte wechseln nur alle ~$CLONE_SKB Pakete, nicht pro Paket." >&2
+fi
 
 ##### Checks ##################################################################
 
